@@ -28,7 +28,7 @@ object MuxCodec {
 
     /**
      * Parses complete mux frames from [buf]. Returns consumed byte count and list of frames.
-     * Throws on invalid magic or version.
+     * Throws on invalid magic, version, or payload length.
      */
     fun parse(buf: ByteArray, offset: Int, length: Int): Pair<Int, List<Frame>> {
         val frames = ArrayList<Frame>()
@@ -48,6 +48,14 @@ object MuxCodec {
             val bb = ByteBuffer.wrap(buf, pos + 8, 8).order(ByteOrder.BIG_ENDIAN)
             val channelId = bb.int
             val payloadLength = bb.int
+            // A negative length leaves pos where it is or moves it backwards: -16 never
+            // advances, and landing on an earlier header re-reads it, so frames grows until
+            // OutOfMemoryError. Near Int.MAX_VALUE, HEADER_SIZE + payloadLength wraps negative
+            // and copyOfRange attempts a ~2 GiB array. OutOfMemoryError is not an Exception,
+            // so callers that catch Exception never see it.
+            if (payloadLength < 0 || payloadLength > Int.MAX_VALUE - HEADER_SIZE) {
+                throw IllegalArgumentException("mux: bad payload length $payloadLength")
+            }
             val total = HEADER_SIZE + payloadLength
             if (end - pos < total) {
                 break
